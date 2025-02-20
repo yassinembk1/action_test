@@ -14,19 +14,23 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2  # Ensures at least one previous commit is available
 
       - name: Generate Code Diff
         run: |
-          git diff HEAD^ > code_diff.txt || echo "No diff available" > code_diff.txt
+          git fetch --unshallow || true  # Ensure full commit history
+          git diff HEAD^ > code_diff.txt || git diff --staged > code_diff.txt || echo "No diff available" > code_diff.txt
           echo "Code Diff:"
           cat code_diff.txt
 
       - name: Send Code Diff to AI Agent
         id: security_scan
         run: |
+          DIFF_CONTENT=$(cat code_diff.txt | base64)
           RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" \
-            -d "{\"question\": \"Does this code contain security vulnerabilities?\", \"diff\": \"$(cat code_diff.txt | base64)\"}" \
+            -d "{\"question\": \"Does this code contain security vulnerabilities?\", \"diff\": \"$DIFF_CONTENT\"}" \
             https://agentapi.vercel.app/chat)
 
           echo "$RESPONSE" > ai_response.json
