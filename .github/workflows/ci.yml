@@ -1,12 +1,13 @@
-name: Security Scan with AI Decision Making
+name: Security Scan on Push
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - main  # Runs only on pushes to main branch
+      - dev   # (Optional) Add other branches if needed
 
 permissions:
-  pull-requests: write
+  contents: read  # Allow access to repo contents
 
 jobs:
   security_scan:
@@ -16,7 +17,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # Ensure we get the latest commits for diff
+          fetch-depth: 2  # Ensure we get the latest commit for diff
 
       - name: Get Code Diff
         run: |
@@ -33,4 +34,20 @@ jobs:
           echo "AI Response: $RESPONSE" >> $GITHUB_STEP_SUMMARY
           echo "status=$(echo $RESPONSE | jq -r '.status')" >> $GITHUB_ENV
 
+      - name: Take Action Based on AI Decision
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS="${{ env.status }}"
 
+          if [[ "$STATUS" == "Approve Commit: No vulnerabilities found" ]]; then
+            echo "✅ Commit Approved."
+
+          elif [[ "$STATUS" == "Warning: Minor issue detected" ]]; then
+            echo "⚠️ Security Warning: Minor issues found."
+            echo "Check the AI report in the workflow summary."
+
+          elif [[ "$STATUS" == "Block Commit: Critical vulnerability found" ]]; then
+            echo "🚨 Blocking commit due to critical vulnerabilities."
+            exit 1
+          fi
