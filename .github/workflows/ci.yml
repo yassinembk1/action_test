@@ -17,12 +17,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # Ensure we get the latest commit for diff
+          fetch-depth: 2  # Fetch previous commit for diff
 
       - name: Get Code Diff
         run: |
           git diff HEAD^ > code_diff.txt
-          echo "✅ Code diff extracted"
+          echo "Code Diff:"
+          cat code_diff.txt
 
       - name: Send Code Diff to AI Agent
         id: security_scan
@@ -31,8 +32,24 @@ jobs:
             -d "{\"diff\": \"$(cat code_diff.txt)\"}" \
             https://agentapi.vercel.app/chat)
 
-          echo "AI Response: $RESPONSE" >> $GITHUB_STEP_SUMMARY
+          echo "$RESPONSE" > ai_response.json  # Save response for visualization
           echo "status=$(echo $RESPONSE | jq -r '.status')" >> $GITHUB_ENV
+
+      - name: Visualize AI Response & Code Diff
+        run: |
+          echo "## 🔍 AI Security Scan Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📌 Code Diff" >> $GITHUB_STEP_SUMMARY
+          echo '```diff' >> $GITHUB_STEP_SUMMARY
+          cat code_diff.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🤖 AI Analysis" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat ai_response.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Take Action Based on AI Decision
         env:
