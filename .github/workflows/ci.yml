@@ -1,13 +1,12 @@
-name: Security Scan on Push
+name: Security Scan with AI
 
 on:
   push:
     branches:
-      - main  # Runs only on pushes to main branch
-      - dev   # (Optional) Add other branches if needed
-
-permissions:
-  contents: read  # Allow access to repo contents
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
   security_scan:
@@ -15,27 +14,26 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2  # Fetch previous commit for diff
+        uses: actions/checkout@v2
 
-      - name: Get Code Diff
+      - name: Generate Code Diff
         run: |
-          git diff HEAD^ > code_diff.txt
+          git diff HEAD^ > code_diff.txt || echo "No diff available" > code_diff.txt
           echo "Code Diff:"
           cat code_diff.txt
 
       - name: Send Code Diff to AI Agent
         id: security_scan
         run: |
-          RESPONSE=$(curl -X POST -H "Content-Type: application/json" \
-            -d "{\"diff\": \"$(cat code_diff.txt)\"}" \
+          RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" \
+            -d "{\"question\": \"Does this code contain security vulnerabilities?\", \"diff\": \"$(cat code_diff.txt | base64)\"}" \
             https://agentapi.vercel.app/chat)
 
-          echo "$RESPONSE" > ai_response.json  # Save response for visualization
-          echo "status=$(echo $RESPONSE | jq -r '.status')" >> $GITHUB_ENV
+          echo "$RESPONSE" > ai_response.json
+          jq . ai_response.json  # Pretty-print JSON for debugging
+          echo "status=$(jq -r '.status // "Error: No status found"' ai_response.json)" >> $GITHUB_ENV
 
-      - name: Visualize AI Response & Code Diff
+      - name: Display AI Security Scan Report
         run: |
           echo "## 🔍 AI Security Scan Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -52,19 +50,17 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Take Action Based on AI Decision
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          STATUS="${{ env.status }}"
-
-          if [[ "$STATUS" == "Approve Commit: No vulnerabilities found" ]]; then
-            echo "✅ Commit Approved."
-
-          elif [[ "$STATUS" == "Warning: Minor issue detected" ]]; then
-            echo "⚠️ Security Warning: Minor issues found."
-            echo "Check the AI report in the workflow summary."
-
-          elif [[ "$STATUS" == "Block Commit: Critical vulnerability found" ]]; then
-            echo "🚨 Blocking commit due to critical vulnerabilities."
+          if [[ "$status" == "Approve PR: No vulnerabilities found" ]]; then
+            echo "✅ No vulnerabilities detected. PR is safe."
+          elif [[ "$status" == "Request changes: Minor issue detected" ]]; then
+            echo "⚠️ Requesting changes due to minor security issues."
+            curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -d '{"body": "⚠️ Security scan found minor issues. Please review and fix."}' \
+              https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
+          elif [[ "$status" == "Block PR: Critical vulnerability found" ]]; then
+            echo "🚨 Critical vulnerability detected! Blocking PR."
             exit 1
+          else
+            echo "❌ Unknown status from AI. Review manually."
           fi
