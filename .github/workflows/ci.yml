@@ -1,26 +1,36 @@
-name: CI Workflow
+name: Security Scan with AI Decision Making
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
 
+permissions:
+  pull-requests: write
+
 jobs:
-  build:
+  security_scan:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          fetch-depth: 2  # Ensure we get the latest commits for diff
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Get Code Diff
+        run: |
+          git diff HEAD^ > code_diff.txt
+          echo "✅ Code diff extracted"
+
+      - name: Send Code Diff to AI Agent
+        id: security_scan
+        run: |
+          RESPONSE=$(curl -X POST -H "Content-Type: application/json" \
+            -d "{\"diff\": \"$(cat code_diff.txt)\"}" \
+            https://agentapi.vercel.app/chat)
+
+          echo "AI Response: $RESPONSE" >> $GITHUB_STEP_SUMMARY
+          echo "status=$(echo $RESPONSE | jq -r '.status')" >> $GITHUB_ENV
+
 
