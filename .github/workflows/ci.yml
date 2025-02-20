@@ -28,9 +28,13 @@ jobs:
       - name: Send Code Diff to AI Agent
         id: security_scan
         run: |
-          DIFF_CONTENT=$(cat code_diff.txt | base64)
+          DIFF_CONTENT=$(jq -Rs . < code_diff.txt)  # Properly escape the diff content
+          JSON_PAYLOAD=$(jq -n --arg question "Does this code contain security vulnerabilities?" --arg diff "$DIFF_CONTENT" '{question: $question, diff: $diff}')
+          
+          echo "Sending payload: $JSON_PAYLOAD"  # Debugging
+
           RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" \
-            -d "{\"question\": \"Does this code contain security vulnerabilities?\", \"diff\": \"$DIFF_CONTENT\"}" \
+            -d "$JSON_PAYLOAD" \
             https://agentapi.vercel.app/chat)
 
           echo "$RESPONSE" > ai_response.json
