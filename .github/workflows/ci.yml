@@ -1,20 +1,85 @@
-name: Slack Notification
+name: Security Scan with AI
 
-on: 
+on:
   push:
     branches:
-      - main  # Change if needed
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  send_slack_message:
+  security_scan:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Send Slack Message
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2  # Ensures at least one previous commit is available
+
+      - name: Generate Code Diff
         run: |
-          curl -X POST -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
-          -H "Content-type: application/json" \
-          --data '{
-            "channel": "C08EEK2A8EN", 
-            "text": "🚀 A new push was made to *main*! Commit: ${{ github.event.head_commit.message }}"
-          }' \
-          https://slack.com/api/chat.postMessage
+          git fetch --unshallow || true  # Ensure full commit history
+          git diff HEAD^ > code_diff.txt || git diff --staged > code_diff.txt || echo "No diff available" > code_diff.txt
+          echo "Code Diff:"
+          cat code_diff.txt
+
+      - name: Send Code Diff to AI Agent
+        id: security_scan
+        run: |
+          DIFF_CONTENT=$(jq -Rs . < code_diff.txt)  # Properly escape the diff content
+          JSON_PAYLOAD=$(jq -n --arg question "Does this code contain security vulnerabilities?" --arg diff "$DIFF_CONTENT" '{question: $question, diff: $diff}')
+          
+          echo "Sending payload: $JSON_PAYLOAD"  # Debugging
+
+          RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" \
+            -d "$JSON_PAYLOAD" \
+            https://agentapi.vercel.app/chat)
+
+          echo "$RESPONSE" > ai_response.json
+          jq . ai_response.json  # Pretty-print JSON for debugging
+          echo "status=$(jq -r '.status // "Error: No status found"' ai_response.json)" >> $GITHUB_ENV
+
+      - name: Display AI Security Scan Report
+        run: |
+          echo "## 🔍 AI Security Scan Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📌 Code Diff" >> $GITHUB_STEP_SUMMARY
+          echo '```diff' >> $GITHUB_STEP_SUMMARY
+          cat code_diff.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🤖 AI Analysis" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat ai_response.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Send Report to Slack
+        run: |
+          SLACK_MESSAGE="🔍 *AI Security Scan Report*\n\n"
+          SLACK_MESSAGE+="*Status:* $(jq -r '.status' ai_response.json)\n"
+          SLACK_MESSAGE+="*Summary:* $(jq -r '.summary // "No summary provided"' ai_response.json)\n"
+
+          curl -X POST -H "Authorization: Bearer ${{ secrets.SLACK_AUTH_TOKEN }}" \
+               -H "Content-Type: application/json" \
+               --data '{"channel": "${{ secrets.SLACK_CHANNEL_ID }}", "text": "'"$SLACK_MESSAGE"'"}' \
+               https://slack.com/api/chat.postMessage
+
+      - name: Take Action Based on AI Decision
+        run: |
+          if [[ "$status" == "Approve PR: No vulnerabilities found" ]]; then
+            echo "✅ No vulnerabilities detected. PR is safe."
+          elif [[ "$status" == "Request changes: Minor issue detected" ]]; then
+            echo "⚠️ Requesting changes due to minor security issues."
+            curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -d '{"body": "⚠️ Security scan found minor issues. Please review and fix."}' \
+              https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
+          elif [[ "$status" == "Block PR: Critical vulnerability found" ]]; then
+            echo "🚨 Critical vulnerability detected! Blocking PR."
+            exit 1
+          else
+            echo "❌ Unknown status from AI. Review manually."
+          fi
