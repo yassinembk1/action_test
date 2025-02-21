@@ -23,8 +23,12 @@ jobs:
         id: ai_scan
         run: |
           DIFF_CONTENT=$(jq -Rs . < code_diff.txt)
-          FULL_QUESTION="Analyze this code diff for vulnerabilities:\n$DIFF_CONTENT" # Concatenate
-          JSON_PAYLOAD=$(jq -n --arg question "$FULL_QUESTION" '{question: $question}')  # Only the question
+          if [ -z "$DIFF_CONTENT" ]; then
+            FULL_QUESTION="No code diff available. No security analysis possible."
+          else
+            FULL_QUESTION="Analyze this code diff for vulnerabilities:\n$DIFF_CONTENT"
+          fi
+          JSON_PAYLOAD=$(jq -n --arg question "$FULL_QUESTION" '{question: $question}')
           echo "🔍 Sending AI request to API..."
           echo "JSON Payload: $JSON_PAYLOAD"
           RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" https://agentapi.vercel.app/chat 2>&1)
@@ -39,13 +43,13 @@ jobs:
           fi
           echo "✅ AI Response Received:"
           cat ai_response.json  # Debugging
-      
-            - name: Upload AI Response
-              uses: actions/upload-artifact@v4
-              with:
-                name: ai_response
-                path: ai_response.json
-                retention-days: 1
+
+      - name: Upload AI Response
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai_response
+          path: ai_response.json
+          retention-days: 1
 
   send_slack_message:
     runs-on: ubuntu-latest
@@ -62,13 +66,11 @@ jobs:
         run: |
           AI_RESPONSE=$(jq -r '.response' ai_response.json)
           TRUNCATED_RESPONSE=$(echo "$AI_RESPONSE" | head -c 2000)  # Slack limit
-
           SLACK_MESSAGE="🔍 *AI Security Scan Report*\n\n*Analysis:*\n$TRUNCATED_RESPONSE\n"
-
           curl -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
           -H "Content-type: application/json" \
           --data '{
-            "channel": "C08EEK2A8EN", 
+            "channel": "C08EEK2A8EN",
             "text": "'"$SLACK_MESSAGE"'"
           }' \
           https://slack.com/api/chat.postMessage
