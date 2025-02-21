@@ -16,31 +16,28 @@ jobs:
 
       - name: Generate Code Diff
         run: |
-          git diff HEAD^ HEAD || echo "No previous commit" > code_diff.txt
+          git diff HEAD^ > code_diff.txt || echo "No previous commit, no diff available" > code_diff.txt
           cat code_diff.txt  # Debugging
 
       - name: Send Code Diff to AI Agent
         id: ai_scan
         run: |
           DIFF_CONTENT=$(jq -Rs . < code_diff.txt)
-          if [ -z "$DIFF_CONTENT" ] || [ "$DIFF_CONTENT" == "\"\"" ]; then
-            echo "⚠️ No code diff available. Skipping AI analysis."
-            echo '{"response": "No code diff available"}' > ai_response.json
-          else
-            JSON_PAYLOAD=$(jq -n --arg question "Analyze this code for security vulnerabilities" --arg diff "$DIFF_CONTENT" '{question: $question, diff: $diff}')
-            echo "🔍 Sending AI request to API..."
-            RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" https://agentapi.vercel.app/chat)
-            echo "$RESPONSE" > ai_response.json
-            if [ ! -s ai_response.json ]; then
-              echo "❌ No AI response available!"
-              echo '{"response": "No AI response available"}' > ai_response.json
-            fi
+          JSON_PAYLOAD=$(jq -n --arg question "Analyze this code for security vulnerabilities" --arg diff "$DIFF_CONTENT" '{question: $question, diff: $diff}')
+
+          echo "🔍 Sending AI request to API..."
+          RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" https://agentapi.vercel.app/chat)
+          echo "$RESPONSE" > ai_response.json
+
+          if [ ! -s ai_response.json ]; then
+            echo "❌ No AI response available!"
+            echo '{"response": "No AI response available"}' > ai_response.json
           fi
+
           echo "✅ AI Response Received:"
           cat ai_response.json  # Debugging
 
       - name: Upload AI Response
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ai_response
@@ -60,24 +57,15 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
-          if [ -z "$SLACK_BOT_TOKEN" ]; then
-            echo "❌ Slack token is missing!"
-            exit 1
-          fi
-
           AI_RESPONSE=$(jq -r '.response' ai_response.json)
-          TRUNCATED_RESPONSE=$(echo "$AI_RESPONSE" | head -c 2000 | jq -Rs .)
+          TRUNCATED_RESPONSE=$(echo "$AI_RESPONSE" | head -c 2000)  # Slack limit
 
           SLACK_MESSAGE="🔍 *AI Security Scan Report*\n\n*Analysis:*\n$TRUNCATED_RESPONSE\n"
 
-          echo "📤 Sending message to Slack..."
-          RESPONSE=$(curl -s -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-            -H "Content-type: application/json" \
-            --data "{\"channel\": \"C08EEK2A8EN\", \"text\": $SLACK_MESSAGE}" \
-            https://slack.com/api/chat.postMessage)
-
-          echo "📝 Slack Response: $RESPONSE"
-          if [[ $(echo "$RESPONSE" | jq -r '.ok') != "true" ]]; then
-            echo "❌ Failed to send Slack message!"
-            exit 1
-          fi
+          curl -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+          -H "Content-type: application/json" \
+          --data '{
+            "channel": "C08EEK2A8EN", 
+            "text": "'"$SLACK_MESSAGE"'"
+          }' \
+          https://slack.com/api/chat.postMessage
