@@ -23,26 +23,29 @@ jobs:
         id: ai_scan
         run: |
           DIFF_CONTENT=$(jq -Rs . < code_diff.txt)
-          JSON_PAYLOAD=$(jq -n --arg question "Analyze this code for security vulnerabilities" --arg diff "$DIFF_CONTENT" '{question: $question, diff: $diff}')
-
+          FULL_QUESTION="Analyze this code diff for vulnerabilities:\n$DIFF_CONTENT" # Concatenate
+          JSON_PAYLOAD=$(jq -n --arg question "$FULL_QUESTION" '{question: $question}')  # Only the question
           echo "🔍 Sending AI request to API..."
-          RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" https://agentapi.vercel.app/chat)
+          echo "JSON Payload: $JSON_PAYLOAD"
+          RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" https://agentapi.vercel.app/chat 2>&1)
+          HTTP_CODE=$? # Capture the exit code
           echo "$RESPONSE" > ai_response.json
-
-          if [ ! -s ai_response.json ]; then
+          if [ $HTTP_CODE -ne 0 ]; then
+            echo "❌ API Request Failed with code $HTTP_CODE"
+            echo '{"response": "API Request Failed"}' > ai_response.json
+          elif [ ! -s ai_response.json ]; then
             echo "❌ No AI response available!"
             echo '{"response": "No AI response available"}' > ai_response.json
           fi
-
           echo "✅ AI Response Received:"
           cat ai_response.json  # Debugging
-
-      - name: Upload AI Response
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai_response
-          path: ai_response.json
-          retention-days: 1
+      
+            - name: Upload AI Response
+              uses: actions/upload-artifact@v4
+              with:
+                name: ai_response
+                path: ai_response.json
+                retention-days: 1
 
   send_slack_message:
     runs-on: ubuntu-latest
