@@ -1,72 +1,66 @@
+name: AI Security Scan & Slack Notification
+
 on:
   push:
     branches:
-      - main
-  pull_request:
-    branches:
-      - main
+      - main  # Change this if needed
 
 jobs:
   security_scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # Latest version
 
       - name: Generate Code Diff
         run: |
-          git fetch --unshallow || true
+          git fetch --prune --unshallow || true
           git diff HEAD^ > code_diff.txt || git diff --staged > code_diff.txt || echo "No diff available" > code_diff.txt
 
       - name: Send Code Diff to AI Agent
-        id: security_scan
+        id: ai_scan
         run: |
           DIFF_CONTENT=$(jq -Rs . < code_diff.txt)
           JSON_PAYLOAD=$(jq -n --arg question "Does this code contain security vulnerabilities?" --arg diff "$DIFF_CONTENT" '{question: $question, diff: $diff}')
 
-          echo "🔍 Sending AI request..."
+          echo "🔍 Sending AI request to API..."
           RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" https://agentapi.vercel.app/chat)
           echo "$RESPONSE" > ai_response.json
 
-          echo "🔍 AI Response Received:"
+          if [ ! -s ai_response.json ]; then
+            echo "❌ No AI response available!"
+            echo '{"response": "No AI response available"}' > ai_response.json
+          fi
+
+          echo "✅ AI Response Received:"
           cat ai_response.json  # Debugging
 
-          jq . ai_response.json  # Pretty-print for logs
-          echo "status=$(jq -r '.status // "Error: No status found"' ai_response.json)" >> $GITHUB_ENV
-
       - name: Upload AI Response
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4  # Correct version
         with:
           name: ai_response
           path: ai_response.json
+          retention-days: 1  # Store for 1 day
 
   send_slack_message:
     runs-on: ubuntu-latest
     needs: security_scan
     steps:
       - name: Download AI Response
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: ai_response
 
-      - name: Verify AI Response
-        run: |
-          if [ ! -s ai_response.json ]; then
-            echo "❌ No AI response available!"
-            echo '{"response": "No AI response available"}' > ai_response.json
-          fi
-          echo "✅ AI Response Found:"
-          cat ai_response.json  # Debugging
-
       - name: Send Slack Message
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
           AI_RESPONSE=$(jq -r '.response' ai_response.json)
-          TRUNCATED_RESPONSE=$(echo "$AI_RESPONSE" | head -c 2000)  # Limit to 2000 chars
+          TRUNCATED_RESPONSE=$(echo "$AI_RESPONSE" | head -c 2000)  # Slack limit
 
-          SLACK_MESSAGE="🔍 *AI Security Scan Report*\n\n"
-          SLACK_MESSAGE+="*🔎 Analysis:*\n$TRUNCATED_RESPONSE\n\n"
+          SLACK_MESSAGE="🔍 *AI Security Scan Report*\n\n*Analysis:*\n$TRUNCATED_RESPONSE\n"
 
-          curl -X POST -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+          curl -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
           -H "Content-type: application/json" \
           --data '{
             "channel": "C08EEK2A8EN", 
