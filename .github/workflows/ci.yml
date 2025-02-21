@@ -1,5 +1,3 @@
-name: Security Scan with AI & Slack Notification
-
 on:
   push:
     branches:
@@ -11,84 +9,62 @@ on:
 jobs:
   security_scan:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 2  # Ensures at least one previous commit is available
 
       - name: Generate Code Diff
         run: |
-          git fetch --unshallow || true  # Ensure full commit history
+          git fetch --unshallow || true
           git diff HEAD^ > code_diff.txt || git diff --staged > code_diff.txt || echo "No diff available" > code_diff.txt
-          echo "Code Diff:"
-          cat code_diff.txt
 
       - name: Send Code Diff to AI Agent
         id: security_scan
         run: |
-          DIFF_CONTENT=$(jq -Rs . < code_diff.txt)  # Properly escape the diff content
+          DIFF_CONTENT=$(jq -Rs . < code_diff.txt)
           JSON_PAYLOAD=$(jq -n --arg question "Does this code contain security vulnerabilities?" --arg diff "$DIFF_CONTENT" '{question: $question, diff: $diff}')
-          
-          echo "Sending payload: $JSON_PAYLOAD"  # Debugging
 
-          RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" \
-            -d "$JSON_PAYLOAD" \
-            https://agentapi.vercel.app/chat)
-
+          echo "🔍 Sending AI request..."
+          RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" https://agentapi.vercel.app/chat)
           echo "$RESPONSE" > ai_response.json
-          jq . ai_response.json  # Pretty-print JSON for debugging
+
+          echo "🔍 AI Response Received:"
+          cat ai_response.json  # Debugging
+
+          jq . ai_response.json  # Pretty-print for logs
           echo "status=$(jq -r '.status // "Error: No status found"' ai_response.json)" >> $GITHUB_ENV
 
-      - name: Display AI Security Scan Report
-        run: |
-          echo "## 🔍 AI Security Scan Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "### 📌 Code Diff" >> $GITHUB_STEP_SUMMARY
-          echo 'diff' >> $GITHUB_STEP_SUMMARY
-          cat code_diff.txt >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "### 🤖 AI Analysis" >> $GITHUB_STEP_SUMMARY
-          echo 'json' >> $GITHUB_STEP_SUMMARY
-          cat ai_response.json >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-
-      - name: Take Action Based on AI Decision
-        run: |
-          if [[ "$status" == "Approve PR: No vulnerabilities found" ]]; then
-            echo "✅ No vulnerabilities detected. PR is safe."
-          elif [[ "$status" == "Request changes: Minor issue detected" ]]; then
-            echo "⚠️ Requesting changes due to minor security issues."
-            curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -d '{"body": "⚠️ Security scan found minor issues. Please review and fix."}' \
-              https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
-          elif [[ "$status" == "Block PR: Critical vulnerability found" ]]; then
-            echo "🚨 Critical vulnerability detected! Blocking PR."
-            exit 1
-          else
-            echo "❌ Unknown status from AI. Review manually."
-          fi
+      - name: Upload AI Response
+        uses: actions/upload-artifact@v3
+        with:
+          name: ai_response
+          path: ai_response.json
 
   send_slack_message:
     runs-on: ubuntu-latest
-    needs: security_scan  # S'assure que Slack ne s'exécute qu'après le scan
-
+    needs: security_scan
     steps:
-      - name: Vérifier si le fichier `ai_response.json` existe
-        run: |
-          if [ ! -f ai_response.json ]; then
-            echo '{"status": "Error", "summary": "No AI response available"}' > ai_response.json
-          fi
+      - name: Download AI Response
+        uses: actions/download-artifact@v3
+        with:
+          name: ai_response
 
-      - name: Envoyer le message Slack
+      - name: Verify AI Response
         run: |
-          SLACK_MESSAGE="🔍 *AI Security Scan Report*\n"
-          SLACK_MESSAGE+="*Status:* $(jq -r '.status // "Unknown"' ai_response.json)\n"
-          SLACK_MESSAGE+="*Summary:* $(jq -r '.summary // "No summary provided"' ai_response.json)\n"
+          if [ ! -s ai_response.json ]; then
+            echo "❌ No AI response available!"
+            echo '{"response": "No AI response available"}' > ai_response.json
+          fi
+          echo "✅ AI Response Found:"
+          cat ai_response.json  # Debugging
+
+      - name: Send Slack Message
+        run: |
+          AI_RESPONSE=$(jq -r '.response' ai_response.json)
+          TRUNCATED_RESPONSE=$(echo "$AI_RESPONSE" | head -c 2000)  # Limit to 2000 chars
+
+          SLACK_MESSAGE="🔍 *AI Security Scan Report*\n\n"
+          SLACK_MESSAGE+="*🔎 Analysis:*\n$TRUNCATED_RESPONSE\n\n"
 
           curl -X POST -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
           -H "Content-type: application/json" \
@@ -97,4 +73,3 @@ jobs:
             "text": "'"$SLACK_MESSAGE"'"
           }' \
           https://slack.com/api/chat.postMessage
-
