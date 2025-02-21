@@ -3,25 +3,27 @@ name: AI Security Scan & Slack Notification
 on:
   push:
     branches:
-      - main  # Change this if needed
+      - main  # Adjust if needed
 
 jobs:
   security_scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4  # Latest version
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Ensure we have the last commit for diff comparison
 
       - name: Generate Code Diff
         run: |
-          git fetch --prune --unshallow || true
-          git diff HEAD^ > code_diff.txt || git diff --staged > code_diff.txt || echo "No diff available" > code_diff.txt
+          git diff HEAD^ > code_diff.txt || echo "No previous commit, no diff available" > code_diff.txt
+          cat code_diff.txt  # Debugging
 
       - name: Send Code Diff to AI Agent
         id: ai_scan
         run: |
           DIFF_CONTENT=$(jq -Rs . < code_diff.txt)
-          JSON_PAYLOAD=$(jq -n --arg question "Does this code contain security vulnerabilities?" --arg diff "$DIFF_CONTENT" '{question: $question, diff: $diff}')
+          JSON_PAYLOAD=$(jq -n --arg question "Analyze this code for security vulnerabilities" --arg diff "$DIFF_CONTENT" '{question: $question, diff: $diff}')
 
           echo "🔍 Sending AI request to API..."
           RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" https://agentapi.vercel.app/chat)
@@ -36,11 +38,11 @@ jobs:
           cat ai_response.json  # Debugging
 
       - name: Upload AI Response
-        uses: actions/upload-artifact@v4  # Correct version
+        uses: actions/upload-artifact@v4
         with:
           name: ai_response
           path: ai_response.json
-          retention-days: 1  # Store for 1 day
+          retention-days: 1
 
   send_slack_message:
     runs-on: ubuntu-latest
